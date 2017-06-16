@@ -50,20 +50,33 @@ class SlackAPI
   end
 
   def backlog(name, count = nil)
-    name = name.sub(/^#/, "")
-    members = rpc("users.list").fetch("members")
+    name  = name.sub(/^#/, "")
+    users = rpc("users.list").fetch("members")
 
-    history(name, count).reverse.flat_map do |message|
+    history(users, name, count).reverse.flat_map do |message|
       user = message.key?("user") &&
-        members.detect { |u| u["id"] == message["user"] }
+        users.detect { |u| u["id"] == message["user"] }
 
-      format_message_lines(user, message["text"], members)
+      format_message_lines(user, message["text"], users)
     end
   end
 
   private
 
-  def history(name, count = nil)
+  ## translate a username into an IM id
+  def im_for_user(users, ims, username)
+    user = users.find do |u|
+      u['name'] == username
+    end
+
+    return nil if user.nil?
+
+    ims.find do |im|
+      im['user'] == user['id']
+    end
+  end
+
+  def history(users, name, count = nil)
     channels = rpc("channels.list").fetch("channels")
 
     if channel = channels.detect { |c| c["name"] == name }
@@ -74,6 +87,18 @@ class SlackAPI
 
     if group = groups.detect { |g| g["name"] == name }
       return rpc("groups.history", history_params(group, count)).fetch("messages")
+    end
+
+    mpims = rpc("mpim.list").fetch("groups")
+
+    if mpim = mpims.detect { |m| m["name"] == name }
+      return rpc("mpim.history", history_params(mpim, count)).fetch("messages")
+    end
+
+    ims = rpc("im.list").fetch("ims")
+
+    if im = im_for_user(users, ims, name)
+      return rpc("im.history", history_params(im, count)).fetch("messages")
     end
 
     []
@@ -176,6 +201,7 @@ def on_join(_, signal, data)
     # Not our own JOIN event
     return Weechat::WEECHAT_RC_OK
   end
+
 
   channel = data.sub(/.*JOIN (.*)$/, '\1')
   buffer_id = Weechat.info_get("irc_buffer", "#{server},#{channel}")
